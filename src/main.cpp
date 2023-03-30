@@ -11,7 +11,6 @@
 #define SERVICE_UUID "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
 #define ACCL_CHAR_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
 #define GYRO_CHAR_UUID "beb5483f-36e1-4688-b7f5-ea07361b26a8"
-#define TIME_CHAR_UUID "31b5c560-cce6-11ed-afa1-0242ac120002"
 
 float accX = 0.0F;
 float accY = 0.0F;
@@ -25,22 +24,16 @@ float pitch = 0.0F;
 float roll  = 0.0F;
 float yaw   = 0.0F;
 
+float batteryVoltage = 0.0F;
+
 RTC_DS3231 rtc;
-RTC_TimeTypeDef RTC_TimeStruct;
-RTC_DateTypeDef RTC_DateStruct;
 
 BLEServer* pServer = NULL;
 BLEService* pService = NULL;
 BLECharacteristic* pAccelChar = NULL;
 BLECharacteristic* pGyroChar = NULL;
-BLECharacteristic* pTimeChar = NULL;
 
 bool deviceConnected = false;
-
-struct AccelData {
-  unsigned long timestamp;
-  float acceleration[3];
-};
 
 class MyServerCallbacks : public BLEServerCallbacks {
     void onConnect(BLEServer* pServer) {
@@ -83,7 +76,8 @@ bool initBLEServer() {
     // gyro characteristic
     pGyroChar = pService->createCharacteristic(
         GYRO_CHAR_UUID,
-        BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY
+        BLECharacteristic::PROPERTY_READ |
+        BLECharacteristic::PROPERTY_NOTIFY
     );
     pGyroChar->addDescriptor(new BLE2902());
 
@@ -94,16 +88,9 @@ bool initBLEServer() {
 }
 
 void onButtonAdvertise() {
-    // Serial.println("reset advertising");
+    // reset advertising
     pService->start();
     pServer->getAdvertising()->start();
-}
-
-float getBatteryLevel(void)
-{
-    // uint16_t batVoltage = M5.Axp.GetBatVoltage();
-    // return ( batVoltage < 3.2 ) ? 0 : ( batVoltage - 3.2 ) * 100;
-    return M5.Axp.GetBatVoltage();
 }
 
 void setup() {
@@ -137,11 +124,14 @@ void loop() {
     M5.Lcd.printf("%6.2f  %6.2f  %6.2f o/s\n", gyroX, gyroY, gyroZ);
     M5.Lcd.printf(" %5.2f   %5.2f   %5.2f G\n\n\n\n", accX, accY, accZ);
     M5.Lcd.printf(" %5.2f   %5.2f   %5.2f\n", pitch, roll, yaw);
-    // M5.Lcd.printf("Temperature : %.2f C", temp);
 
-    // you want somewhere in between 4.2 and 
+    // you want somewhere in between 4.2 and 3.7
+    batteryVoltage = M5.Axp.GetBatVoltage();
     M5.Lcd.setCursor(0, 70);
-    M5.Lcd.printf("Battery: %.2f, Power: %.2f", M5.Axp.GetBatVoltage(), M5.Axp.GetBatPower()/1000);
+    M5.Lcd.printf("Battery: %.2f, Power: %.2f", batteryVoltage, M5.Axp.GetBatPower()/1000);
+    if (batteryVoltage < 3.7) {
+        M5.Axp.PowerOff(); // need to turn it on manually after this happens (rather than just plugging it in)
+    }
 
     if (deviceConnected) {
         // uint32_t timestamp = rtc.now().unixtime() + milliAdjustment;
@@ -166,10 +156,6 @@ void loop() {
         memcpy(&gyroData[12], &milliseconds, sizeof(milliseconds));
         pGyroChar->setValue(gyroData, sizeof(gyroData));
         pGyroChar->notify();
-
-        // uint8_t timeData[4];
-        // memcpy(&timeData[0], &timestamp, sizeof(timestamp));
-        // pTimeChar->setValue(timeData, sizeof(timeData));
     } else {
         M5.Lcd.setCursor(0, 0);
         M5.Lcd.println("IMU TEST (not connected)");
