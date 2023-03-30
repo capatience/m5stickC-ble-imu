@@ -87,11 +87,11 @@ bool initBLEServer() {
     return true;
 }
 
-void onButtonAdvertise() {
-    // reset advertising
-    pService->start();
-    pServer->getAdvertising()->start();
-}
+// void onButtonAdvertise() {
+//     // reset advertising
+//     pService->start();
+//     pServer->getAdvertising()->start();
+// }
 
 void setup() {
     // while(!Serial);
@@ -99,7 +99,7 @@ void setup() {
     M5.begin();
     setupUI();
     M5.IMU.Init();
-    attachInterrupt(digitalPinToInterrupt(BUTTON_A_PIN), onButtonAdvertise, RISING);
+    // attachInterrupt(digitalPinToInterrupt(BUTTON_A_PIN), onButtonAdvertise, RISING);
 
     initBLEServer();
     
