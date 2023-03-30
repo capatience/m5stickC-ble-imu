@@ -25,8 +25,6 @@ float pitch = 0.0F;
 float roll  = 0.0F;
 float yaw   = 0.0F;
 
-unsigned long myMillis;
-
 RTC_DS3231 rtc;
 RTC_TimeTypeDef RTC_TimeStruct;
 RTC_DateTypeDef RTC_DateStruct;
@@ -47,13 +45,11 @@ struct AccelData {
 class MyServerCallbacks : public BLEServerCallbacks {
     void onConnect(BLEServer* pServer) {
         deviceConnected = true;
-        // Serial.println("Connected!");
     };
 
     void onDisconnect(BLEServer* pServer) {
         deviceConnected = false;
         pServer->getAdvertising()->start();
-        // Serial.println("Disconnected");
     };
 };
 
@@ -65,6 +61,8 @@ void setupUI() {
     M5.Lcd.println("   X       Y       Z");
     M5.Lcd.setCursor(0, 50);
     M5.Lcd.println("  Pitch   Roll    Yaw");
+    M5.Lcd.setCursor(0, 70);
+    M5.Lcd.printf("Battery:");
 }
 
 bool initBLEServer() {
@@ -82,19 +80,12 @@ bool initBLEServer() {
     );
     pAccelChar->addDescriptor(new BLE2902());
 
-    // timestamp characteristic
-    // pTimeChar = pService->createCharacteristic(
-    //     TIME_CHAR_UUID,
-    //     BLECharacteristic::PROPERTY_READ
-    // );
-    // pTimeChar->addDescriptor(new BLE2902());
-
     // gyro characteristic
-    // pGyroChar = pService->createCharacteristic(
-    //     GYRO_CHAR_UUID,
-    //     BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY
-    // );
-    // pGyroChar->addDescriptor(new BLE2902());
+    pGyroChar = pService->createCharacteristic(
+        GYRO_CHAR_UUID,
+        BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY
+    );
+    pGyroChar->addDescriptor(new BLE2902());
 
     pService->start();
     pServer->getAdvertising()->start();
@@ -106,6 +97,13 @@ void onButtonAdvertise() {
     // Serial.println("reset advertising");
     pService->start();
     pServer->getAdvertising()->start();
+}
+
+float getBatteryLevel(void)
+{
+    // uint16_t batVoltage = M5.Axp.GetBatVoltage();
+    // return ( batVoltage < 3.2 ) ? 0 : ( batVoltage - 3.2 ) * 100;
+    return M5.Axp.GetBatVoltage();
 }
 
 void setup() {
@@ -134,24 +132,18 @@ void loop() {
     M5.IMU.getGyroData(&gyroX, &gyroY, &gyroZ);
     M5.IMU.getAccelData(&accX, &accY, &accZ);
     M5.IMU.getAhrsData(&pitch, &roll, &yaw);
-
+    
     M5.Lcd.setCursor(0, 20);
-    // M5.Lcd.printf("%6.2f  %6.2f  %6.2f o/s\n", gyroX, gyroY, gyroZ);
+    M5.Lcd.printf("%6.2f  %6.2f  %6.2f o/s\n", gyroX, gyroY, gyroZ);
     M5.Lcd.printf(" %5.2f   %5.2f   %5.2f G\n\n\n\n", accX, accY, accZ);
-    // M5.Lcd.printf(" %5.2f   %5.2f   %5.2f\n", pitch, roll, yaw);
+    M5.Lcd.printf(" %5.2f   %5.2f   %5.2f\n", pitch, roll, yaw);
     // M5.Lcd.printf("Temperature : %.2f C", temp);
 
+    // you want somewhere in between 4.2 and 
+    M5.Lcd.setCursor(0, 70);
+    M5.Lcd.printf("Battery: %.2f, Power: %.2f", M5.Axp.GetBatVoltage(), M5.Axp.GetBatPower()/1000);
+
     if (deviceConnected) {
-        // AccelData acc;
-        // acc.timestamp = millis();
-        // acc.acceleration[0] = accX;
-        // acc.acceleration[1] = accY;
-        // acc.acceleration[2] = accZ;
-
-        // byte* acc_bytes = (byte*) &acc;
-        // pAccelChar->setValue(acc_bytes, sizeof(acc));
-        // pAccelChar->notify();
-
         // uint32_t timestamp = rtc.now().unixtime() + milliAdjustment;
         uint32_t milliseconds = millis();
 
@@ -164,15 +156,16 @@ void loop() {
         memcpy(&accelData[4], &accY, sizeof(accY));
         memcpy(&accelData[8], &accZ, sizeof(accZ));
         memcpy(&accelData[12], &milliseconds, sizeof(milliseconds));
-        pAccelChar->notify();
         pAccelChar->setValue(accelData, sizeof(accelData));
+        pAccelChar->notify();
         
-        // // uint8_t gyroData[12];
-        // memcpy(&gyroData[0], &gyroX, sizeof(gyroX));
-        // memcpy(&gyroData[4], &gyroY, sizeof(gyroY));
-        // memcpy(&gyroData[8], &gyroZ, sizeof(gyroZ));
-        // pGyroChar->setValue(gyroData, sizeof(gyroData));
-        // pGyroChar->notify();
+        uint8_t gyroData[16];
+        memcpy(&gyroData[0], &gyroX, sizeof(gyroX));
+        memcpy(&gyroData[4], &gyroY, sizeof(gyroY));
+        memcpy(&gyroData[8], &gyroZ, sizeof(gyroZ));
+        memcpy(&gyroData[12], &milliseconds, sizeof(milliseconds));
+        pGyroChar->setValue(gyroData, sizeof(gyroData));
+        pGyroChar->notify();
 
         // uint8_t timeData[4];
         // memcpy(&timeData[0], &timestamp, sizeof(timestamp));
@@ -181,5 +174,5 @@ void loop() {
         M5.Lcd.setCursor(0, 0);
         M5.Lcd.println("IMU TEST (not connected)");
     }
-    delay(1000);
+    delay(50);
 }
