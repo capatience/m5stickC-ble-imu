@@ -8,9 +8,10 @@
 
 #define BUTTON_A_PIN 37
 
-#define SERVICE_UUID "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
-#define ACCL_CHAR_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
-#define GYRO_CHAR_UUID "beb5483f-36e1-4688-b7f5-ea07361b26a8"
+#define SERVICE_UUID "4faf0000-1fb5-459e-8fcc-c5c9c331914b"
+#define ACC_CHAR_UUID "4faf0001-1fb5-459e-8fcc-c5c9c331914b"
+#define GYRO_CHAR_UUID "4faf0002-1fb5-459e-8fcc-c5c9c331914b"
+#define ATT_CHAR_UUID "4faf0003-1fb5-459e-8fcc-c5c9c331914b"
 
 float accX = 0.0F;
 float accY = 0.0F;
@@ -32,6 +33,7 @@ BLEServer* pServer = NULL;
 BLEService* pService = NULL;
 BLECharacteristic* pAccelChar = NULL;
 BLECharacteristic* pGyroChar = NULL;
+BLECharacteristic* pAttChar = NULL;
 
 bool deviceConnected = false;
 
@@ -67,7 +69,7 @@ bool initBLEServer() {
     
     // acceleration characteristic
     pAccelChar = pService->createCharacteristic(
-        ACCL_CHAR_UUID,
+        ACC_CHAR_UUID,
         BLECharacteristic::PROPERTY_READ |
         BLECharacteristic::PROPERTY_NOTIFY
     );
@@ -81,6 +83,14 @@ bool initBLEServer() {
     );
     pGyroChar->addDescriptor(new BLE2902());
 
+    // attitude characteristic
+    pAttChar = pService->createCharacteristic(
+        ATT_CHAR_UUID,
+        BLECharacteristic::PROPERTY_READ |
+        BLECharacteristic::PROPERTY_NOTIFY
+    );
+    pAttChar->addDescriptor(new BLE2902());
+    
     pService->start();
     pServer->getAdvertising()->start();
 
@@ -156,6 +166,15 @@ void loop() {
         memcpy(&gyroData[12], &milliseconds, sizeof(milliseconds));
         pGyroChar->setValue(gyroData, sizeof(gyroData));
         pGyroChar->notify();
+
+        uint8_t attData[16];
+        memcpy(&attData[0], &pitch, sizeof(pitch));
+        memcpy(&attData[4], &roll, sizeof(roll));
+        memcpy(&attData[8], &yaw, sizeof(yaw));
+        memcpy(&attData[12], &milliseconds, sizeof(milliseconds));
+        pAttChar->setValue(attData, sizeof(attData));
+        pAttChar->notify();
+
     } else {
         M5.Lcd.setCursor(0, 0);
         M5.Lcd.println("IMU TEST (not connected)");
