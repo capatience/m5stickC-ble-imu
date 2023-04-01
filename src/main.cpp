@@ -5,25 +5,21 @@
 #include <BLEUtils.h>
 #include <RTClib.h>
 #include <Wire.h>
+#include <MadgwickAHRS.h>
 
 #define BUTTON_A_PIN 37
+
+#define SAMPLING_RATE 50 // Hz
 
 #define SERVICE_UUID "4faf0000-1fb5-459e-8fcc-c5c9c331914b"
 #define ACC_CHAR_UUID "4faf0001-1fb5-459e-8fcc-c5c9c331914b"
 #define GYRO_CHAR_UUID "4faf0002-1fb5-459e-8fcc-c5c9c331914b"
 #define ATT_CHAR_UUID "4faf0003-1fb5-459e-8fcc-c5c9c331914b"
 
-float accX = 0.0F;
-float accY = 0.0F;
-float accZ = 0.0F;
+Madgwick filter;
+unsigned long microsPerReading = 1000000 / SAMPLING_RATE;
 
-float gyroX = 0.0F;
-float gyroY = 0.0F;
-float gyroZ = 0.0F;
-
-float pitch = 0.0F;
-float roll  = 0.0F;
-float yaw   = 0.0F;
+float ax, ay, az, gx, gy, gz, mx, my, mz; // acc, gyro, and attitude
 
 float batteryVoltage = 0.0F;
 
@@ -54,8 +50,8 @@ void setupUI() {
     M5.Lcd.println("IMU TEST");
     M5.Lcd.setCursor(0, 10);
     M5.Lcd.println("   X       Y       Z");
-    M5.Lcd.setCursor(0, 50);
-    M5.Lcd.println("  Pitch   Roll    Yaw");
+    // M5.Lcd.setCursor(0, 50);
+    // M5.Lcd.println("  Pitch   Roll    Yaw");
     M5.Lcd.setCursor(0, 70);
     M5.Lcd.printf("Battery:");
 }
@@ -83,13 +79,13 @@ bool initBLEServer() {
     );
     pGyroChar->addDescriptor(new BLE2902());
 
-    // attitude characteristic
-    pAttChar = pService->createCharacteristic(
-        ATT_CHAR_UUID,
-        BLECharacteristic::PROPERTY_READ |
-        BLECharacteristic::PROPERTY_NOTIFY
-    );
-    pAttChar->addDescriptor(new BLE2902());
+    // // attitude characteristic
+    // pAttChar = pService->createCharacteristic(
+    //     ATT_CHAR_UUID,
+    //     BLECharacteristic::PROPERTY_READ |
+    //     BLECharacteristic::PROPERTY_NOTIFY
+    // );
+    // pAttChar->addDescriptor(new BLE2902());
     
     pService->start();
     pServer->getAdvertising()->start();
@@ -109,12 +105,12 @@ void setup() {
     M5.begin();
     setupUI();
     M5.IMU.Init();
+    Wire.begin();
+    rtc.begin();
+
     // attachInterrupt(digitalPinToInterrupt(BUTTON_A_PIN), onButtonAdvertise, RISING);
 
     initBLEServer();
-    
-    Wire.begin();
-    rtc.begin();
     
     // BLEAdvertising* pAdvertising = BLEDevice::getAdvertising();
     // pAdvertising->addServiceUUID(pService->getUUID());
@@ -125,59 +121,96 @@ void setup() {
 }
 
 void loop() {
-    // Read accelerometer and gyroscope data from IMU
-    M5.IMU.getGyroData(&gyroX, &gyroY, &gyroZ);
-    M5.IMU.getAccelData(&accX, &accY, &accZ);
-    M5.IMU.getAhrsData(&pitch, &roll, &yaw);
     
-    M5.Lcd.setCursor(0, 20);
-    M5.Lcd.printf("%6.2f  %6.2f  %6.2f o/s\n", gyroX, gyroY, gyroZ);
-    M5.Lcd.printf(" %5.2f   %5.2f   %5.2f G\n\n\n\n", accX, accY, accZ);
-    M5.Lcd.printf(" %5.2f   %5.2f   %5.2f\n", pitch, roll, yaw);
+    // SENSOR READINGS
+    static unsigned long prevMicros = 0;
+    if (micros() - prevMicros >= microsPerReading) {
 
-    // you want somewhere in between 4.2 and 3.7
-    batteryVoltage = M5.Axp.GetBatVoltage();
-    M5.Lcd.setCursor(0, 70);
-    M5.Lcd.printf("Battery: %.2f, Power: %.2f", batteryVoltage, M5.Axp.GetBatPower()/1000);
-    if (batteryVoltage < 3.7) {
-        M5.Axp.PowerOff(); // need to turn it on manually after this happens (rather than just plugging it in)
+        // Read accelerometer and gyroscope data from IMU
+        M5.IMU.getAccelData(&ax, &ay, &az);
+        M5.IMU.getGyroData(&gx, &gy, &gz);
+        M5.IMU.getAhrsData(&mx, &my, &mz);
+
+        filter.update(gx, gy, gz, ax, ay, az, mx, my, mz);
+        // filter.updateIMU(gx, gy, gz, ax, ay, az); // I wonder if this one is better
+
+        // Get the quaternion values
+        float roll = filter.getRollRadians();
+        float pitch = filter.getPitchRadians();
+        float yaw = filter.getYawRadians();
+
+        // Compute linear acceleration in the world frame
+        float world_ax = cos(yaw) * cos(pitch) * ax + (sin(yaw) * cos(roll) + cos(yaw) * sin(pitch) * sin(roll)) * ay + (sin(yaw) * sin(roll) - cos(yaw) * sin(pitch) * cos(roll)) * az;
+        float world_ay = -sin(yaw) * cos(pitch) * ax + (cos(yaw) * cos(roll) - sin(yaw) * sin(pitch) * sin(roll)) * ay + (cos(yaw) * sin(roll) + sin(yaw) * sin(pitch) * cos(roll)) * az;
+        float world_az = sin(pitch) * ax - cos(pitch) * sin(roll) * ay - cos(pitch) * cos(roll) * az;
+        
+        // subtract the gravity from the world frame acceleration (assume gravity = 1g in the Z-direction)
+        world_az += 1.0;
+
+        if (deviceConnected) {
+
+            // uint32_t timestamp = rtc.now().unixtime() + milliAdjustment;
+            uint32_t microseconds = micros();
+            
+            // Convert data to byte arrays
+            uint8_t accelData[16];
+            memcpy(&accelData[0], &world_ax, sizeof(world_ax));
+            memcpy(&accelData[4], &world_ay, sizeof(world_ay));
+            memcpy(&accelData[8], &world_az, sizeof(world_az));
+            memcpy(&accelData[12], &microseconds, sizeof(microseconds));
+            pAccelChar->setValue(accelData, sizeof(accelData));
+            pAccelChar->notify();
+            
+            uint8_t gyroData[16];
+            memcpy(&gyroData[0], &gx, sizeof(gx));
+            memcpy(&gyroData[4], &gy, sizeof(gy));
+            memcpy(&gyroData[8], &gz, sizeof(gz));
+            memcpy(&gyroData[12], &microseconds, sizeof(microseconds));
+            pGyroChar->setValue(gyroData, sizeof(gyroData));
+            pGyroChar->notify();
+
+            // uint8_t attData[16];
+            // memcpy(&attData[0], &pitch, sizeof(pitch));
+            // memcpy(&attData[4], &roll, sizeof(roll));
+            // memcpy(&attData[8], &yaw, sizeof(yaw));
+            // memcpy(&attData[12], &microseconds, sizeof(microseconds));
+            // pAttChar->setValue(attData, sizeof(attData));
+            // pAttChar->notify();
+        }
+
+        prevMicros = micros();
     }
 
-    if (deviceConnected) {
-        // uint32_t timestamp = rtc.now().unixtime() + milliAdjustment;
-        uint32_t milliseconds = millis();
+    // BATTERY CHECK
+    static unsigned long lastBatteryCheck = 0;
+    if (millis() - lastBatteryCheck >= 1000) {
+        // you want somewhere in between 4.2 and 3.7
+        batteryVoltage = M5.Axp.GetBatVoltage();
+        if (batteryVoltage < 3.7) {
+            M5.Axp.PowerOff();
+        }
 
-        M5.Lcd.setCursor(0, 0);
-        M5.Lcd.println("IMU TEST (connected)");
-        
-        // Convert data to byte arrays
-        uint8_t accelData[16];
-        memcpy(&accelData[0], &accX, sizeof(accX));
-        memcpy(&accelData[4], &accY, sizeof(accY));
-        memcpy(&accelData[8], &accZ, sizeof(accZ));
-        memcpy(&accelData[12], &milliseconds, sizeof(milliseconds));
-        pAccelChar->setValue(accelData, sizeof(accelData));
-        pAccelChar->notify();
-        
-        uint8_t gyroData[16];
-        memcpy(&gyroData[0], &gyroX, sizeof(gyroX));
-        memcpy(&gyroData[4], &gyroY, sizeof(gyroY));
-        memcpy(&gyroData[8], &gyroZ, sizeof(gyroZ));
-        memcpy(&gyroData[12], &milliseconds, sizeof(milliseconds));
-        pGyroChar->setValue(gyroData, sizeof(gyroData));
-        pGyroChar->notify();
-
-        uint8_t attData[16];
-        memcpy(&attData[0], &pitch, sizeof(pitch));
-        memcpy(&attData[4], &roll, sizeof(roll));
-        memcpy(&attData[8], &yaw, sizeof(yaw));
-        memcpy(&attData[12], &milliseconds, sizeof(milliseconds));
-        pAttChar->setValue(attData, sizeof(attData));
-        pAttChar->notify();
-
-    } else {
-        M5.Lcd.setCursor(0, 0);
-        M5.Lcd.println("IMU TEST (not connected)");
+        lastBatteryCheck = millis();
     }
-    delay(50);
+
+    // UI UPDATE
+    static unsigned long lastUIUpdate = 0;
+    if (millis() - lastUIUpdate >= 500) {
+        M5.Lcd.setCursor(0, 0);
+        if (deviceConnected) {
+            M5.Lcd.println("IMU TEST (connected)");
+        } else {
+            M5.Lcd.println("IMU TEST (not connected)");
+        }
+        
+        M5.Lcd.setCursor(0, 20);
+        M5.Lcd.printf("%6.2f  %6.2f  %6.2f o/s\n", gx, gy, gz);
+        M5.Lcd.printf(" %5.2f   %5.2f   %5.2f G\n\n\n\n", ax, ay, az);
+        // M5.Lcd.printf(" %5.2f   %5.2f   %5.2f\n", pitch, roll, yaw);
+
+        M5.Lcd.setCursor(0, 70);
+        M5.Lcd.printf("Battery: %.2f, Power: %.2f", batteryVoltage, M5.Axp.GetBatPower()/1000);
+
+        lastUIUpdate = millis();
+    }
 }
